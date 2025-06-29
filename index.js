@@ -1,32 +1,27 @@
 require('dotenv').config();
 const express = require('express');
-const {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ChannelType,
-  ComponentType,
-  EmbedBuilder,
-  PermissionsBitField,
+const { 
+  Client, 
+  GatewayIntentBits, 
+  Partials, 
+  ActionRowBuilder, 
+  ButtonBuilder, 
+  ButtonStyle, 
+  ChannelType, 
+  ComponentType, 
+  EmbedBuilder, 
+  PermissionsBitField 
 } = require('discord.js');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get('/', (req, res) => {
-  res.send('Bot läuft!');
-});
-
-app.listen(PORT, () => {
-  console.log(`Webserver läuft auf Port ${PORT}`);
-});
+require('./keep_alive.js');
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
-  partials: [Partials.Channel],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
+  partials: [Partials.Channel]
 });
 
 client.once('ready', () => {
@@ -35,118 +30,134 @@ client.once('ready', () => {
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName !== 'lobby') return;
 
-  if (interaction.commandName === 'lobby') {
-    // ✅ Nur in bestimmtem Channel erlauben:
-    const erlaubterChannel = '1388989682053812374';
-    if (interaction.channelId !== erlaubterChannel) {
-      return interaction.reply({
-        content: '❌ Du kannst diesen Befehl nur in <#1388989682053812374> verwenden.',
-        ephemeral: true,
-      });
+  // Nur in Channel 1388989682053812374
+  if (interaction.channel.id !== '1388989682053812374') {
+    return interaction.reply({ content: '❌ Du kannst diesen Befehl nur im Channel <#1388989682053812374> benutzen.', ephemeral: true });
+  }
+
+  const map = interaction.options.getString('map');
+  const mode = interaction.options.getString('modus');
+
+  const embed = new EmbedBuilder()
+    .setTitle('🚗 Neue Lobby wird erstellt')
+    .setColor(0x2ecc71)
+    .setThumbnail('https://cdn.discordapp.com/attachments/1263943643346239619/1387888063807492267/image.png')
+    .addFields(
+      { name: '📍 Map', value: map, inline: true },
+      { name: '🧠 Modus', value: mode, inline: true },
+      { name: '🎮 Host', value: `<@${interaction.user.id}>`, inline: true }
+    )
+    .setFooter({ text: 'Wähle dein Team durch Klicken auf einen Button.' });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('team_a')
+      .setLabel('Team A 🔴')
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId('team_b')
+      .setLabel('Team B 🔵')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  // Nachricht in Channel posten
+  await interaction.reply({ content: '✅ Lobby erstellt!', ephemeral: true });
+
+  const lobbyChannel = interaction.channel;
+  const msg = await lobbyChannel.send({
+    content: `<@&1388296883159437382>`,
+    embeds: [embed],
+    components: [row]
+  });
+
+  const teamA = [interaction.user];
+  const teamB = [];
+
+  const collector = msg.createMessageComponentCollector({
+    componentType: ComponentType.Button,
+    time: 30 * 60 * 1000
+  });
+
+  collector.on('collect', async i => {
+    const user = i.user;
+
+    if (teamA.includes(user) || teamB.includes(user)) {
+      return i.reply({ content: '❌ Du bist bereits in einem Team!', ephemeral: true });
     }
 
-    const mode = interaction.options.getString('modus');
-    const map = interaction.options.getString('map');
+    if (i.customId === 'team_a' && teamA.length < 4) {
+      teamA.push(user);
+    } else if (i.customId === 'team_b' && teamB.length < 4) {
+      teamB.push(user);
+    } else {
+      return i.reply({ content: '❌ Dieses Team ist voll oder ungültig.', ephemeral: true });
+    }
 
-    const embed = new EmbedBuilder()
-      .setTitle(`🚗 Neue ${mode} Lobby`)
-      .setColor(0x3498db)
-      .setThumbnail('https://cdn.discordapp.com/attachments/1263943643346239619/1387888063807492267/image.png')
-      .addFields(
-        { name: '🗺️ Map', value: map, inline: true },
-        { name: '🎮 Modus', value: mode, inline: true },
-        { name: '📌 Host', value: `<@${interaction.user.id}>` }
-      )
-      .setFooter({ text: 'Wähle ein Team, um beizutreten.' });
+    i.reply({ content: `✅ Du bist nun in Team ${i.customId === 'team_a' ? 'A 🔴' : 'B 🔵'}`, ephemeral: true });
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('teamA').setLabel('🚗 Team A').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('teamB').setLabel('🚙 Team B').setStyle(ButtonStyle.Secondary)
-    );
+    embed.setDescription(`**Team A 🔴**\n${teamA.map(u => `<@${u.id}>`).join('\n')}\n\n**Team B 🔵**\n${teamB.map(u => `<@${u.id}>`).join('\n')}`);
+    await msg.edit({ embeds: [embed] });
 
-    const lobbyChannel = interaction.channel;
-    const msg = await lobbyChannel.send({ embeds: [embed], components: [row] });
+    if (teamA.length === 4 && teamB.length === 4) {
+      collector.stop();
 
-    const collector = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 30 * 60 * 1000 });
+      embed.setTitle('✅ Lobby ist voll')
+        .setColor(0xf1c40f)
+        .setFooter({ text: 'Ticket wird erstellt...' });
+      await msg.edit({ embeds: [embed], components: [] });
 
-    const teamSize = mode === '4vs4' ? 4 : 6;
-    const teamA = [];
-    const teamB = [];
+      // Kategorie suchen
+      const category = interaction.guild.channels.cache.find(c => c.name.toLowerCase().includes('lobby') && c.type === ChannelType.GuildCategory);
+      if (!category) return msg.reply('❌ Kategorie nicht gefunden.');
 
-    collector.on('collect', async i => {
-      const userId = i.user.id;
-      if (teamA.includes(userId) || teamB.includes(userId)) {
-        return i.reply({ content: '❌ Du bist bereits einem Team beigetreten.', ephemeral: true });
-      }
+      const ticket = await interaction.guild.channels.create({
+        name: `ticket-${interaction.user.username}`,
+        type: ChannelType.GuildText,
+        parent: category.id,
+        permissionOverwrites: [
+          {
+            id: interaction.guild.id,
+            deny: [PermissionsBitField.Flags.ViewChannel]
+          },
+          ...teamA.map(u => ({
+            id: u.id,
+            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+          })),
+          ...teamB.map(u => ({
+            id: u.id,
+            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+          }))
+        ]
+      });
 
-      if (i.customId === 'teamA' && teamA.length < teamSize) {
-        teamA.push(userId);
-        await i.reply({ content: '✅ Du bist Team A beigetreten.', ephemeral: true });
-      } else if (i.customId === 'teamB' && teamB.length < teamSize) {
-        teamB.push(userId);
-        await i.reply({ content: '✅ Du bist Team B beigetreten.', ephemeral: true });
-      } else {
-        await i.reply({ content: '❌ Dieses Team ist voll.', ephemeral: true });
-      }
+      const closeBtn = new ButtonBuilder()
+        .setCustomId('close_ticket')
+        .setLabel('🔒 Ticket schließen')
+        .setStyle(ButtonStyle.Danger);
 
-      embed.data.fields = [
-        { name: '🗺️ Map', value: map, inline: true },
-        { name: '🎮 Modus', value: mode, inline: true },
-        { name: '📌 Host', value: `<@${interaction.user.id}>` },
-        { name: '🚗 Team A', value: teamA.map(id => `<@${id}>`).join('\n') || '—', inline: true },
-        { name: '🚙 Team B', value: teamB.map(id => `<@${id}>`).join('\n') || '—', inline: true },
-      ];
+      const closeRow = new ActionRowBuilder().addComponents(closeBtn);
 
-      await msg.edit({ embeds: [embed] });
+      await ticket.send({
+        content: `🎫 Willkommen in der Lobby <@&1388296883159437382>!\nTeam A: ${teamA.map(u => `<@${u.id}>`).join(', ')}\nTeam B: ${teamB.map(u => `<@${u.id}>`).join(', ')}\n\nVerwendet den Button unten, um das Ticket zu schließen.`,
+        components: [closeRow]
+      });
 
-      if (teamA.length === teamSize && teamB.length === teamSize) {
-        collector.stop('voll');
-      }
-    });
+      const btnCollector = ticket.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60 * 60 * 1000 });
 
-    collector.on('end', async (_, reason) => {
-      if (reason === 'voll') {
-        const category = interaction.guild.channels.cache.find(
-          c => c.name.toLowerCase() === 'lobby suche' && c.type === ChannelType.GuildCategory
-        );
-
-        const ticketChannel = await interaction.guild.channels.create({
-          name: `match-${Date.now()}`,
-          type: ChannelType.GuildText,
-          parent: category?.id,
-          permissionOverwrites: [
-            { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-            ...[...teamA, ...teamB].map(id => ({
-              id,
-              allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages],
-            })),
-          ],
-        });
-
-        const closeBtn = new ButtonBuilder()
-          .setCustomId('close_ticket')
-          .setLabel('🔒 Ticket schließen')
-          .setStyle(ButtonStyle.Danger);
-
-        const closeRow = new ActionRowBuilder().addComponents(closeBtn);
-
-        await ticketChannel.send({
-          content: `Willkommen zum Match!\nTeam A: ${teamA.map(id => `<@${id}>`).join(', ')}\nTeam B: ${teamB.map(id => `<@${id}>`).join(', ')}`,
-          components: [closeRow],
-        });
-
-        const closeCollector = ticketChannel.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60 * 60 * 1000 });
-
-        closeCollector.on('collect', async btn => {
-          if (btn.customId === 'close_ticket') {
-            await btn.reply('🔒 Ticket wird geschlossen...');
-            ticketChannel.delete().catch(() => {});
+      btnCollector.on('collect', async btn => {
+        if (btn.customId === 'close_ticket') {
+          if (!teamA.includes(btn.user) && !teamB.includes(btn.user)) {
+            return btn.reply({ content: '❌ Nur Teilnehmer dürfen das Ticket schließen.', ephemeral: true });
           }
-        });
-      }
-    });
-  }
+
+          await btn.reply('🔒 Ticket wird geschlossen...');
+          ticket.delete().catch(() => {});
+        }
+      });
+    }
+  });
 });
 
 client.login(process.env.TOKEN);
