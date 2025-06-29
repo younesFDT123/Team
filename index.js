@@ -27,20 +27,20 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// === KONFIGURATION ===
-const ALLOWED_CHANNEL = '1388989682053812374'; // Nur dieser Channel erlaubt
-const ROLE_PING_ID = '1388296883159437382';   // LobbyPing Rolle
+const ALLOWED_CHANNEL = '1388989682053812374';
+const ROLE_PING_ID = '1388296883159437382';
 
 client.once('ready', () => {
   console.log(`✅ Bot ist online als ${client.user.tag}`);
 });
 
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== 'lobby') return;
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName !== 'lobbyv2') return;
 
   if (interaction.channelId !== ALLOWED_CHANNEL) {
     return interaction.reply({
-      content: `❌ Du kannst diesen Befehl nur im <#${ALLOWED_CHANNEL}> verwenden.`,
+      content: `❌ Du kannst diesen Befehl nur im <#${ALLOWED_CHANNEL}> Channel verwenden.`,
       ephemeral: true
     });
   }
@@ -59,73 +59,63 @@ client.on('interactionCreate', async interaction => {
     .addFields(
       { name: '📍 Map', value: map, inline: true },
       { name: '🚗 Modus', value: mode, inline: true },
-      { name: '👥 Teamgröße', value: `${teamSize} vs ${teamSize}`, inline: true },
-      { name: '🎟️ Host', value: `<@${interaction.user.id}>` },
-      {
-        name: '🅰 Lobby A & 🅱 Lobby B',
-        value: `**Lobby A:** *(0/${teamSize})*\n**Lobby B:** *(0/${teamSize})*\n\n**Freie Plätze A:** ${teamSize}\n**Freie Plätze B:** ${teamSize}`
-      }
+      { name: '👥 Teamgröße', value: `${teamSize}`, inline: true },
+      { name: '🎟️ Host', value: `<@${interaction.user.id}>`, inline: false },
+      { name: '🆚 Teams', value: `🅰 Lobby A: *(0)*  🅱 Lobby B: *(0)*`, inline: false }
     )
     .setFooter({ text: 'Wähle ein Team, um beizutreten.' });
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('join_a').setLabel('🅰 Lobby A').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('join_b').setLabel('🅱 Lobby B').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder()
+      .setCustomId('join_a')
+      .setLabel('🅰 Team A')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('join_b')
+      .setLabel('🅱 Team B')
+      .setStyle(ButtonStyle.Secondary)
   );
 
-  // 👉 Nur diese Nachricht posten – als Antwort
-  const msg = await interaction.reply({
+  const message = await interaction.channel.send({
     content: `<@&${ROLE_PING_ID}>`,
     embeds: [embed],
-    components: [row],
-    fetchReply: true // damit wir sie für Button-Collector verwenden können
+    components: [row]
   });
 
-  const collector = msg.createMessageComponentCollector({
+  await interaction.reply({ content: '✅ Deine Lobby wurde erstellt!', ephemeral: true });
+
+  const collector = message.createMessageComponentCollector({
     componentType: ComponentType.Button,
-    time: 30 * 60 * 1000
+    time: 30 * 60 * 1000 // 30 Minuten
   });
 
   collector.on('collect', async i => {
     const userId = i.user.id;
-    const userMention = `<@${userId}>`;
 
-    // Prüfen ob User schon drin ist
     if (playersA.includes(userId) || playersB.includes(userId)) {
-      return i.reply({ content: '❗ Du bist bereits in einem Team.', ephemeral: true });
+      return i.reply({ content: '❗ Du bist bereits einem Team beigetreten.', ephemeral: true });
     }
 
-    // Team beitreten
     if (i.customId === 'join_a') {
       if (playersA.length >= teamSize) {
-        return i.reply({ content: '🅰 Lobby A ist voll.', ephemeral: true });
+        return i.reply({ content: '🅰 Team A ist bereits voll.', ephemeral: true });
       }
       playersA.push(userId);
     } else if (i.customId === 'join_b') {
       if (playersB.length >= teamSize) {
-        return i.reply({ content: '🅱 Lobby B ist voll.', ephemeral: true });
+        return i.reply({ content: '🅱 Team B ist bereits voll.', ephemeral: true });
       }
       playersB.push(userId);
     }
 
-    // Embed aktualisieren
-    const updatedEmbed = EmbedBuilder.from(embed).setFields(
-      { name: '📍 Map', value: map, inline: true },
-      { name: '🚗 Modus', value: mode, inline: true },
-      { name: '👥 Teamgröße', value: `${teamSize} vs ${teamSize}`, inline: true },
-      { name: '🎟️ Host', value: `<@${interaction.user.id}>` },
-      {
-        name: '🅰 Lobby A & 🅱 Lobby B',
-        value: `**Lobby A:** ${playersA.map(id => `<@${id}>`).join(', ') || '*(0)*'}\n` +
-               `**Lobby B:** ${playersB.map(id => `<@${id}>`).join(', ') || '*(0)*'}\n\n` +
-               `**Freie Plätze A:** ${teamSize - playersA.length}\n` +
-               `**Freie Plätze B:** ${teamSize - playersB.length}`
-      }
-    );
+    const updatedEmbed = EmbedBuilder.from(embed).spliceFields(4, 1, {
+      name: '🆚 Teams',
+      value: `🅰 Lobby A: ${playersA.map(id => `<@${id}>`).join(', ') || '*(0)*'}  🅱 Lobby B: ${playersB.map(id => `<@${id}>`).join(', ') || '*(0)*'}`
+    });
 
-    await i.update({ embeds: [updatedEmbed] });
+    await message.edit({ embeds: [updatedEmbed] });
+    await i.deferUpdate();
 
-    // Beide Teams voll → Ticket eröffnen
     if (playersA.length === teamSize && playersB.length === teamSize) {
       collector.stop();
 
@@ -174,7 +164,7 @@ client.on('interactionCreate', async interaction => {
         }
       });
 
-      await msg.edit({ content: '✅ Lobby voll – Ticket wurde erstellt!', components: [] });
+      await message.edit({ content: '✅ Lobby voll – Ticket wurde erstellt!', components: [] });
     }
   });
 });
