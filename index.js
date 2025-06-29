@@ -15,13 +15,8 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 app.get('/', (req, res) => res.send('Bot ist online!'));
 app.listen(PORT, () => console.log(`Webserver läuft auf Port ${PORT}`));
-
-// 🔄 Hier dein gewünschter Channel
-const ALLOWED_CHANNEL = '1388989682053812374'; // ✅ NEU: lobby-suche-v2
-const ROLE_PING_ID = '1388296883159437382'; // LobbyPing Rolle
 
 const client = new Client({
   intents: [
@@ -32,25 +27,30 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
+// === KONFIGURATION ===
+const ALLOWED_CHANNEL = '1388989682053812374'; // Nur dieser Channel erlaubt
+const ROLE_PING_ID = '1388296883159437382';   // LobbyPing Rolle
+
 client.once('ready', () => {
   console.log(`✅ Bot ist online als ${client.user.tag}`);
 });
 
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== 'lobby') return;
+  if (!interaction.isChatInputCommand() || interaction.commandName !== 'lobby') return;
 
   if (interaction.channelId !== ALLOWED_CHANNEL) {
     return interaction.reply({
-      content: `❌ Du kannst diesen Befehl nur im <#${ALLOWED_CHANNEL}> Channel verwenden.`,
+      content: `❌ Du kannst diesen Befehl nur im <#${ALLOWED_CHANNEL}> verwenden.`,
       ephemeral: true
     });
   }
 
   const map = interaction.options.getString('map');
   const mode = interaction.options.getString('modus');
-  const teamSize = interaction.options.getString('team');
-  const maxPlayersPerTeam = parseInt(teamSize);
+  const teamSize = parseInt(interaction.options.getString('team'));
+
+  const playersA = [];
+  const playersB = [];
 
   const embed = new EmbedBuilder()
     .setTitle('🎮 Neue Lobby erstellt')
@@ -59,53 +59,27 @@ client.on('interactionCreate', async interaction => {
     .addFields(
       { name: '📍 Map', value: map, inline: true },
       { name: '🚗 Modus', value: mode, inline: true },
-      { name: '👥 Teamgröße', value: teamSize, inline: true },
+      { name: '👥 Teamgröße', value: `${teamSize} vs ${teamSize}`, inline: true },
       { name: '🎟️ Host', value: `<@${interaction.user.id}>` },
       {
-        name: '🅰 Lobby A',
-        value: '*Keine Spieler*',
-        inline: true
-      },
-      {
-        name: 'Freie Plätze A',
-        value: `${maxPlayersPerTeam}`,
-        inline: true
-      },
-      {
-        name: '🅱 Lobby B',
-        value: '*Keine Spieler*',
-        inline: true
-      },
-      {
-        name: 'Freie Plätze B',
-        value: `${maxPlayersPerTeam}`,
-        inline: true
+        name: '🅰 Lobby A & 🅱 Lobby B',
+        value: `**Lobby A:** *(0/${teamSize})*\n**Lobby B:** *(0/${teamSize})*\n\n**Freie Plätze A:** ${teamSize}\n**Freie Plätze B:** ${teamSize}`
       }
     )
     .setFooter({ text: 'Wähle ein Team, um beizutreten.' });
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('join_a')
-      .setLabel('🅰 Lobby A')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId('join_b')
-      .setLabel('🅱 Lobby B')
-      .setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('join_a').setLabel('🅰 Lobby A').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('join_b').setLabel('🅱 Lobby B').setStyle(ButtonStyle.Secondary)
   );
 
-  const channel = interaction.guild.channels.cache.get(ALLOWED_CHANNEL);
-  const msg = await channel.send({
-    content: `<@&${ROLE_PING_ID}>`, // 🔔 Rolle wird hier gepingt
+  // 👉 Nur diese Nachricht posten – als Antwort
+  const msg = await interaction.reply({
+    content: `<@&${ROLE_PING_ID}>`,
     embeds: [embed],
-    components: [row]
+    components: [row],
+    fetchReply: true // damit wir sie für Button-Collector verwenden können
   });
-
-  await interaction.reply({ content: '✅ Lobby erstellt!', ephemeral: true });
-
-  const playersA = [];
-  const playersB = [];
 
   const collector = msg.createMessageComponentCollector({
     componentType: ComponentType.Button,
@@ -114,56 +88,45 @@ client.on('interactionCreate', async interaction => {
 
   collector.on('collect', async i => {
     const userId = i.user.id;
+    const userMention = `<@${userId}>`;
 
+    // Prüfen ob User schon drin ist
     if (playersA.includes(userId) || playersB.includes(userId)) {
-      return i.reply({ content: '❗ Du bist bereits in einer Lobby.', ephemeral: true });
+      return i.reply({ content: '❗ Du bist bereits in einem Team.', ephemeral: true });
     }
 
+    // Team beitreten
     if (i.customId === 'join_a') {
-      if (playersA.length >= maxPlayersPerTeam) {
-        return i.reply({ content: '🅰 Lobby A ist bereits voll.', ephemeral: true });
+      if (playersA.length >= teamSize) {
+        return i.reply({ content: '🅰 Lobby A ist voll.', ephemeral: true });
       }
       playersA.push(userId);
-    }
-
-    if (i.customId === 'join_b') {
-      if (playersB.length >= maxPlayersPerTeam) {
-        return i.reply({ content: '🅱 Lobby B ist bereits voll.', ephemeral: true });
+    } else if (i.customId === 'join_b') {
+      if (playersB.length >= teamSize) {
+        return i.reply({ content: '🅱 Lobby B ist voll.', ephemeral: true });
       }
       playersB.push(userId);
     }
 
+    // Embed aktualisieren
     const updatedEmbed = EmbedBuilder.from(embed).setFields(
       { name: '📍 Map', value: map, inline: true },
       { name: '🚗 Modus', value: mode, inline: true },
-      { name: '👥 Teamgröße', value: teamSize, inline: true },
+      { name: '👥 Teamgröße', value: `${teamSize} vs ${teamSize}`, inline: true },
       { name: '🎟️ Host', value: `<@${interaction.user.id}>` },
       {
-        name: '🅰 Lobby A',
-        value: playersA.length > 0 ? playersA.map(id => `<@${id}>`).join('\n') : '*Keine Spieler*',
-        inline: true
-      },
-      {
-        name: 'Freie Plätze A',
-        value: `${maxPlayersPerTeam - playersA.length}`,
-        inline: true
-      },
-      {
-        name: '🅱 Lobby B',
-        value: playersB.length > 0 ? playersB.map(id => `<@${id}>`).join('\n') : '*Keine Spieler*',
-        inline: true
-      },
-      {
-        name: 'Freie Plätze B',
-        value: `${maxPlayersPerTeam - playersB.length}`,
-        inline: true
+        name: '🅰 Lobby A & 🅱 Lobby B',
+        value: `**Lobby A:** ${playersA.map(id => `<@${id}>`).join(', ') || '*(0)*'}\n` +
+               `**Lobby B:** ${playersB.map(id => `<@${id}>`).join(', ') || '*(0)*'}\n\n` +
+               `**Freie Plätze A:** ${teamSize - playersA.length}\n` +
+               `**Freie Plätze B:** ${teamSize - playersB.length}`
       }
     );
 
-    await msg.edit({ embeds: [updatedEmbed] });
-    await i.deferUpdate();
+    await i.update({ embeds: [updatedEmbed] });
 
-    if (playersA.length === maxPlayersPerTeam && playersB.length === maxPlayersPerTeam) {
+    // Beide Teams voll → Ticket eröffnen
+    if (playersA.length === teamSize && playersB.length === teamSize) {
       collector.stop();
 
       const category = interaction.guild.channels.cache.find(c =>
@@ -212,15 +175,6 @@ client.on('interactionCreate', async interaction => {
       });
 
       await msg.edit({ content: '✅ Lobby voll – Ticket wurde erstellt!', components: [] });
-    }
-  });
-
-  collector.on('end', async () => {
-    if (playersA.length !== maxPlayersPerTeam || playersB.length !== maxPlayersPerTeam) {
-      await msg.edit({
-        content: '⏰ Zeit abgelaufen – Lobby wurde beendet.',
-        components: []
-      });
     }
   });
 });
